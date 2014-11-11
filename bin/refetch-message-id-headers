@@ -1,0 +1,47 @@
+#!/usr/bin/env python
+import click
+from email.parser import HeaderParser
+from inbox.models.session import session_scope
+from inbox.models import *
+from inbox.crispin import connection_pool
+from inbox.mailsync.backends.imap.generic import uidvalidity_cb
+from sqlalchemy.orm import joinedload
+
+
+def refetch_message_id_headers(namespace_id):
+    parser = HeaderParser()
+    with session_scope() as db_session:
+        ns = db_session.query(Namespace).get(namespace_id)
+        conn_pool = connection_pool(account_id=ns.account_id, pool_size=1)
+        with conn_pool.get() as conn:
+            inbox_created_messages = db_session.query(Message). \
+                filter(Message.namespace_id == namespace_id,
+                       ~Message.inbox_uid.is_(None)). \
+                options(joinedload('imapuids').joinedload('folder')).all()
+            imapuid_msg_map = {}
+            for msg in inbox_created_messages:
+                if len(msg.imapuids) > 0:
+                    imapuid_msg_map[msg.imapuids[0]] = msg
+            for imapuid in sorted(imapuid_msg_map.keys(), key=lambda i:
+                                  i.folder_id):
+                if conn.selected_folder_name != imapuid.folder.name:
+                    conn.select_folder(imapuid.folder.name, uidvalidity_cb)
+                headers_dict = conn.fetch_headers([imapuid.msg_uid])
+                headers = parser.parsestr(
+                    headers_dict[imapuid.msg_uid]['BODY[HEADER]'])
+                message_id = headers.get('Message-Id')
+                message = imapuid_msg_map[imapuid]
+                if message.message_id_header is None:
+                    print "setting message_id for {}".format(message.id)
+                message.message_id_header = message_id
+        db_session.commit()
+
+
+@click.command()
+@click.option('--namespace_id')
+def main(namespace_id):
+    refetch_message_id_headers(namespace_id)
+
+
+if __name__ == '__main__':
+    main()
