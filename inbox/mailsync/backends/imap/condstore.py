@@ -10,11 +10,11 @@ No support for server-side threading, so we have to thread messages ourselves.
 """
 from gevent import sleep
 from inbox.crispin import retry_crispin
-from inbox.mailsync.backends.base import (save_folder_names, new_or_updated,
-                                          mailsync_session_scope)
+from inbox.mailsync.backends.base import save_folder_names, new_or_updated
 from inbox.mailsync.backends.imap import common
 from inbox.mailsync.backends.imap.generic import (FolderSyncEngine,
                                                   uidvalidity_cb, UIDStack)
+from inbox.models.session import session_scope
 from inbox.log import get_logger
 log = get_logger()
 
@@ -55,7 +55,7 @@ class CondstoreFolderSyncEngine(FolderSyncEngine):
                           async_download):
         crispin_client.select_folder(self.folder_name, uidvalidity_cb)
         new_highestmodseq = crispin_client.selected_highestmodseq
-        with mailsync_session_scope() as db_session:
+        with session_scope() as db_session:
             saved_folder_info = common.get_folder_info(
                 self.account_id, db_session, self.folder_name)
             # Ensure that we have an initial highestmodseq value stored before
@@ -89,7 +89,7 @@ class CondstoreFolderSyncEngine(FolderSyncEngine):
         changed_uids = crispin_client.new_and_updated_uids(saved_highestmodseq)
         remote_uids = crispin_client.all_uids()
         with self.syncmanager_lock:
-            with mailsync_session_scope() as db_session:
+            with session_scope() as db_session:
                 local_uids = common.all_uids(self.account_id, db_session,
                                              self.folder_name)
                 self.remove_deleted_uids(db_session, local_uids, remote_uids)
@@ -105,7 +105,7 @@ class CondstoreFolderSyncEngine(FolderSyncEngine):
             self.highestmodseq_callback(crispin_client, new, updated,
                                         download_stack, async_download)
 
-        with mailsync_session_scope() as db_session:
+        with session_scope() as db_session:
             self.update_uid_counts(db_session,
                                    remote_uid_count=len(remote_uids))
             common.update_folder_info(self.account_id, db_session,
